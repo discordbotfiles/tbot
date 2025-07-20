@@ -1,56 +1,57 @@
 const fs = require('fs');
 const path = require('path');
+const dataFile = path.join(__dirname, '..', 'data', 'miaCoins.json');
 
-const balancesPath = path.join(__dirname, '..', 'data', 'balances.json');
-const inventoryPath = path.join(__dirname, '..', 'data', 'inventory.json');
-
-function readJSON(file) {
-  if (!fs.existsSync(file)) return {};
-  return JSON.parse(fs.readFileSync(file));
+function getUserData(userId) {
+  if (!fs.existsSync(dataFile)) return {};
+  const data = JSON.parse(fs.readFileSync(dataFile));
+  return data[userId] || { balance: 0, inventory: [] };
 }
 
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+function saveUserData(userId, userData) {
+  const data = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : {};
+  data[userId] = userData;
+  fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 }
+
+const fishTypes = ['🐟', '🐠', '🦈', '🐡', '🐬'];
 
 module.exports = {
   data: {
     name: 'fish',
-    description: 'Go fishing to earn Mia Coins. Requires a Fishing Rod.',
+    description: 'Go fishing (requires Fishing Rod)',
   },
 
-  async execute(interactionOrMessage) {
-    const isSlash = interactionOrMessage.isCommand?.();
-    const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+  async execute(interactionOrMessage, args) {
+    let userId, reply;
 
-    const balances = readJSON(balancesPath);
-    const inventory = readJSON(inventoryPath);
-
-    if (!inventory[userId] || !inventory[userId].includes('fishingrod')) {
-      const msg = 'You need a Fishing Rod to fish. Buy one from the store!';
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    if (interactionOrMessage.user) {
+      userId = interactionOrMessage.user.id;
+    } else {
+      userId = interactionOrMessage.author.id;
     }
 
-    const catchTypes = [
-      { name: 'Small Fish', value: 20 },
-      { name: 'Medium Fish', value: 50 },
-      { name: 'Big Fish', value: 100 },
-      { name: 'Golden Fish', value: 500 },
-    ];
-
-    const caught = catchTypes[Math.floor(Math.random() * catchTypes.length)];
-
-    balances[userId] = (balances[userId] || 0) + caught.value;
-
-    writeJSON(balancesPath, balances);
-
-    const msg = `You caught a **${caught.name}** and earned **${caught.value}** Mia Coins!\nYour new balance: **${balances[userId]} -- mia**`;
-
-    if (isSlash) await interactionOrMessage.reply(msg);
-    else {
-      await interactionOrMessage.channel.send(msg);
-      interactionOrMessage.delete().catch(() => {});
+    const userData = getUserData(userId);
+    if (!userData.inventory || !userData.inventory.includes('fishingrod')) {
+      reply = '🎣 You need a Fishing Rod to fish! Buy one from the store.';
+      if (interactionOrMessage.user) {
+        return interactionOrMessage.reply({ content: reply, ephemeral: true });
+      } else {
+        return interactionOrMessage.channel.send(reply);
+      }
     }
-  },
+
+    const caught = fishTypes[Math.floor(Math.random() * fishTypes.length)];
+    const earned = Math.floor(Math.random() * 100) + 20;
+    userData.balance = (userData.balance || 0) + earned;
+    saveUserData(userId, userData);
+
+    reply = `🎣 You caught a ${caught} and earned **${earned}** Mia coins!`;
+
+    if (interactionOrMessage.user) {
+      await interactionOrMessage.reply({ content: reply, ephemeral: false });
+    } else {
+      await interactionOrMessage.channel.send(reply);
+    }
+  }
 };

@@ -1,141 +1,124 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
 
-const balancesFile = path.join(__dirname, '..', 'data', 'balances.json');
-let balances = {};
-
-if (fs.existsSync(balancesFile)) {
-  balances = JSON.parse(fs.readFileSync(balancesFile));
-}
-
-function saveBalances() {
-  fs.writeFileSync(balancesFile, JSON.stringify(balances, null, 2));
-}
+const MAX_HP = 100;
 
 module.exports = {
-  name: 'fight',
-  description: 'Fight another user in a turn-based battle!',
-  async execute(message, args) {
-    if (args.length < 1) return message.reply('Please mention someone to fight!');
-    const player1 = message.author;
-    const player2 = message.mentions.users.first();
+  data: {
+    name: 'fight',
+    description: 'Start a fight with another user',
+    options: [
+      {
+        name: 'opponent',
+        type: 6, // USER
+        description: 'User to fight with',
+        required: true,
+      }
+    ]
+  },
 
-    if (!player2) return message.reply('You need to mention a user to fight!');
-    if (player2.bot) return message.reply('You cannot fight bots!');
-    if (player2.id === player1.id) return message.reply('You cannot fight yourself!');
+  async execute(interaction) {
+    const user = interaction.user;
+    const opponent = interaction.options.getUser('opponent');
 
-    const bet = args[1] ? parseInt(args[1]) : 0;
-    if (bet && isNaN(bet)) return message.reply('Bet must be a valid number.');
-
-    if (bet > 0) {
-      const bal1 = balances[player1.id]?.mia || 0;
-      const bal2 = balances[player2.id]?.mia || 0;
-      if (bal1 < bet) return message.reply(`You don't have enough Mia Coins to bet ${bet}.`);
-      if (bal2 < bet) return message.reply(`Your opponent doesn't have enough Mia Coins to bet ${bet}.`);
+    if (user.id === opponent.id) {
+      return interaction.reply({ content: "You can't fight yourself!", ephemeral: true });
     }
 
+    // Initialize health
     let hp = {
-      [player1.id]: 100,
-      [player2.id]: 100
+      [user.id]: MAX_HP,
+      [opponent.id]: MAX_HP,
     };
 
-    let turn = player1.id;
+    // Who attacks first randomly
+    let turn = Math.random() < 0.5 ? user.id : opponent.id;
 
-    const createActionRow = () => new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('defend').setLabel('Defend').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('kick').setLabel('Kick').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('punch').setLabel('Punch').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('kiss').setLabel('Kiss').setStyle(ButtonStyle.Success)
-    );
+    const attackButton = new ButtonBuilder()
+      .setCustomId('attack')
+      .setLabel('Attack')
+      .setStyle(ButtonStyle.Danger);
 
-    const fightMessage = await message.channel.send({
-      content: `Fight started between ${player1} and ${player2}!\n${player1} goes first.\n${player1} HP: 100 | ${player2} HP: 100\nBet: ${bet} Mia Coins`,
-      components: [createActionRow()]
+    const defendButton = new ButtonBuilder()
+      .setCustomId('defend')
+      .setLabel('Defend')
+      .setStyle(ButtonStyle.Secondary);
+
+    const row = new ActionRowBuilder().addComponents(attackButton, defendButton);
+
+    await interaction.reply({
+      content: `👊 Fight started between <@${user.id}> and <@${opponent.id}>!\n\n` +
+               `<@${turn}>, it's your turn! Choose your action.`,
+      components: [row],
+      fetchReply: true
     });
 
-    const collector = fightMessage.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 5 * 60 * 1000
+    const message = await interaction.fetchReply();
+
+    const filter = i => 
+      (i.user.id === user.id || i.user.id === opponent.id) &&
+      i.message.id === message.id;
+
+    const collector = message.createMessageComponentCollector({
+      filter,
+      time: 60000,
     });
 
-    let lastAction = null;
+    // Store last defense to reduce damage
+    let defending = {};
 
     collector.on('collect', async i => {
-      if (![player1.id, player2.id].includes(i.user.id)) {
-        return i.reply({ content: 'You are not part of this fight.', ephemeral: true });
-      }
       if (i.user.id !== turn) {
         return i.reply({ content: "It's not your turn!", ephemeral: true });
       }
 
-      const opponent = turn === player1.id ? player2.id : player1.id;
-      const opponentUser = turn === player1.id ? player2 : player1;
+      const action = i.customId;
+      let replyText;
 
-      let damage = 0;
-      let actionText = '';
-
-      switch (i.customId) {
-        case 'defend':
-          lastAction = 'defend';
-          actionText = `${i.user} is defending and will take less damage next turn.`;
-          break;
-        case 'kick':
-          damage = Math.floor(Math.random() * 15) + 5; // 5-19 damage
-          if (lastAction === 'defend' && opponent === i.user.id) {
-            damage = Math.floor(damage / 2);
-          }
-          actionText = `${i.user} kicked ${opponentUser}, dealing ${damage} damage!`;
-          break;
-        case 'punch':
-          damage = Math.floor(Math.random() * 10) + 5; // 5-14 damage
-          if (lastAction === 'defend' && opponent === i.user.id) {
-            damage = Math.floor(damage / 2);
-          }
-          actionText = `${i.user} punched ${opponentUser}, dealing ${damage} damage!`;
-          break;
-        case 'kiss':
-          damage = 0;
-          actionText = `${i.user} kissed ${opponentUser}. How cute! No damage done.`;
-          break;
-      }
-
-      if (damage > 0) {
-        hp[opponent] -= damage;
-        if (hp[opponent] < 0) hp[opponent] = 0;
-      }
-
-      lastAction = i.customId === 'defend' ? 'defend' : null;
-
-      if (hp[opponent] <= 0) {
-        collector.stop('win');
-
-        if (bet > 0) {
-          if (!balances[player1.id]) balances[player1.id] = { mia: 0 };
-          if (!balances[player2.id]) balances[player2.id] = { mia: 0 };
-
-          balances[turn].mia += bet;
-          balances[opponent].mia -= bet;
-          saveBalances();
+      if (action === 'attack') {
+        let damage = Math.floor(Math.random() * 20) + 10;
+        if (defending[opponent.id]) {
+          damage = Math.floor(damage / 2);
         }
 
+        hp[turn === user.id ? opponent.id : user.id] -= damage;
+        defending[turn === user.id ? opponent.id : user.id] = false;
+
+        replyText = `<@${turn}> attacks and deals **${damage}** damage!`;
+      } else if (action === 'defend') {
+        defending[turn] = true;
+        replyText = `<@${turn}> defends and will take half damage next turn.`;
+      }
+
+      // Check for winner
+      if (hp[user.id] <= 0 || hp[opponent.id] <= 0) {
+        collector.stop();
+
+        const winner = hp[user.id] > 0 ? user.id : opponent.id;
+        const loser = winner === user.id ? opponent.id : user.id;
+
         return i.update({
-          content: `${actionText}\n\n${i.user} won the fight!${bet > 0 ? ` They won ${bet} Mia Coins!` : ''}\n\nFinal HP: ${player1}: ${hp[player1.id]} | ${player2}: ${hp[player2.id]}`,
+          content: `${replyText}\n\n🏆 <@${winner}> wins the fight! 🎉\n` +
+                   `Final HP: <@${user.id}>: ${Math.max(hp[user.id], 0)}, <@${opponent.id}>: ${Math.max(hp[opponent.id], 0)}`,
           components: []
         });
       }
 
-      turn = opponent;
+      // Switch turn
+      turn = turn === user.id ? opponent.id : user.id;
 
       await i.update({
-        content: `${actionText}\n\nIt's <@${turn}>'s turn!\n\n${player1}: ${hp[player1.id]} HP | ${player2}: ${hp[player2.id]} HP\nBet: ${bet} Mia Coins`,
-        components: [createActionRow()]
+        content: `${replyText}\n\n<@${turn}>, it's your turn! Choose your action.\n\n` +
+                 `Current HP: <@${user.id}>: ${hp[user.id]}, <@${opponent.id}>: ${hp[opponent.id]}`,
+        components: [row]
       });
     });
 
-    collector.on('end', async (_, reason) => {
-      if (reason === 'time') {
-        await fightMessage.edit({ content: 'Fight ended due to inactivity.', components: [] });
+    collector.on('end', collected => {
+      if (collected.size === 0) {
+        interaction.editReply({
+          content: 'Fight timed out due to inactivity.',
+          components: []
+        });
       }
     });
   }

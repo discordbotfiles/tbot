@@ -1,158 +1,145 @@
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 
-const balancesFile = path.join(__dirname, '..', 'data', 'balances.json');
-let balances = {};
+const WINNING_COMBOS = [
+  [0,1,2],[3,4,5],[6,7,8], // rows
+  [0,3,6],[1,4,7],[2,5,8], // cols
+  [0,4,8],[2,4,6]          // diagonals
+];
 
-// Load balances on start
-if (fs.existsSync(balancesFile)) {
-  balances = JSON.parse(fs.readFileSync(balancesFile));
+function checkWin(board, symbol) {
+  return WINNING_COMBOS.some(combo => combo.every(index => board[index] === symbol));
 }
 
-function saveBalances() {
-  fs.writeFileSync(balancesFile, JSON.stringify(balances, null, 2));
+function isDraw(board) {
+  return board.every(cell => cell !== null);
 }
 
 module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('fight')
-    .setDescription('Fight another user in a turn-based battle!')
-    .addUserOption(option => option
-      .setName('opponent')
-      .setDescription('User to fight')
-      .setRequired(true))
-    .addIntegerOption(option => option
-      .setName('bet')
-      .setDescription('Amount of Mia Coins to bet')
-      .setRequired(false)),
+  data: {
+    name: 'tictactoe',
+    description: 'Play Tic Tac Toe with another user',
+    options: [
+      {
+        name: 'opponent',
+        type: 6, // USER
+        description: 'User to play with',
+        required: true,
+      },
+      {
+        name: 'bet',
+        type: 4, // INTEGER
+        description: 'Mia coins to bet',
+        required: false,
+      }
+    ]
+  },
 
   async execute(interaction) {
     const player1 = interaction.user;
     const player2 = interaction.options.getUser('opponent');
-    const bet = interaction.options.getInteger('bet') ?? 0;
 
-    if (player2.bot) return interaction.reply({ content: 'You cannot fight bots!', ephemeral: true });
-    if (player2.id === player1.id) return interaction.reply({ content: 'You cannot fight yourself!', ephemeral: true });
-
-    // Check balances if betting
-    if (bet > 0) {
-      const bal1 = balances[player1.id]?.mia ?? 0;
-      const bal2 = balances[player2.id]?.mia ?? 0;
-      if (bal1 < bet) return interaction.reply({ content: `You don't have enough Mia Coins to bet ${bet}.`, ephemeral: true });
-      if (bal2 < bet) return interaction.reply({ content: `Your opponent doesn't have enough Mia Coins to bet ${bet}.`, ephemeral: true });
+    if (player1.id === player2.id) {
+      return interaction.reply({ content: "You can't play Tic Tac Toe against yourself!", ephemeral: true });
     }
 
-    // Initialize health
-    let hp = {
-      [player1.id]: 100,
-      [player2.id]: 100
+    let board = Array(9).fill(null); // empty board
+    let currentPlayer = player1.id;
+    const symbols = {
+      [player1.id]: '❌',
+      [player2.id]: '⭕'
     };
 
-    let turn = player1.id; // player1 starts
+    const bet = interaction.options.getInteger('bet') || 0;
 
-    // Action buttons
-    const createActionRow = () => new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('defend').setLabel('Defend').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('kick').setLabel('Kick').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('punch').setLabel('Punch').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('kiss').setLabel('Kiss').setStyle(ButtonStyle.Success)
-    );
+    // Create buttons for board
+    const makeRow = (start) => {
+      const row = new ActionRowBuilder();
+      for (let i = start; i < start + 3; i++) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(i.toString())
+            .setLabel(board[i] || ' ')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(false)
+        );
+      }
+      return row;
+    };
 
-    // Initial message
-    const fightMessage = await interaction.reply({
-      content: `Fight started between ${player1} and ${player2}!\n${player1} goes first.\n${player1} HP: 100 | ${player2} HP: 100\nBet: ${bet} Mia Coins`,
-      components: [createActionRow()],
-      fetchReply: true
+    const rows = [makeRow(0), makeRow(3), makeRow(6)];
+
+    await interaction.reply({
+      content: `🎮 Tic Tac Toe: <@${player1.id}> (❌) vs <@${player2.id}> (⭕) ${bet > 0 ? `| Bet: ${bet} Mia coins` : ''}\n` +
+               `It's <@${currentPlayer}>'s turn!`,
+      components: rows
     });
 
-    // Create collector for buttons
-    const collector = fightMessage.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 5 * 60 * 1000
-    });
+    const message = await interaction.fetchReply();
 
-    let lastAction = null; // To handle defend
+    const collector = message.createMessageComponentCollector({
+      filter: i => (i.user.id === player1.id || i.user.id === player2.id),
+      time: 600000 // 10 minutes
+    });
 
     collector.on('collect', async i => {
-      if (![player1.id, player2.id].includes(i.user.id)) {
-        return i.reply({ content: 'You are not part of this fight.', ephemeral: true });
-      }
-      if (i.user.id !== turn) {
+      if (i.user.id !== currentPlayer) {
         return i.reply({ content: "It's not your turn!", ephemeral: true });
       }
 
-      const opponent = turn === player1.id ? player2.id : player1.id;
-      const opponentUser = turn === player1.id ? player2 : player1;
+      const idx = parseInt(i.customId);
 
-      let damage = 0;
-      let actionText = '';
-
-      switch (i.customId) {
-        case 'defend':
-          lastAction = 'defend';
-          actionText = `${i.user} is defending and will take less damage next turn.`;
-          break;
-        case 'kick':
-          damage = Math.floor(Math.random() * 15) + 5; // 5-19 damage
-          if (lastAction === 'defend' && opponent === i.user.id) {
-            damage = Math.floor(damage / 2);
-          }
-          actionText = `${i.user} kicked ${opponentUser}, dealing ${damage} damage!`;
-          break;
-        case 'punch':
-          damage = Math.floor(Math.random() * 10) + 5; // 5-14 damage
-          if (lastAction === 'defend' && opponent === i.user.id) {
-            damage = Math.floor(damage / 2);
-          }
-          actionText = `${i.user} punched ${opponentUser}, dealing ${damage} damage!`;
-          break;
-        case 'kiss':
-          damage = 0;
-          actionText = `${i.user} kissed ${opponentUser}. How cute! No damage done.`;
-          break;
+      if (board[idx] !== null) {
+        return i.reply({ content: "That spot is already taken!", ephemeral: true });
       }
 
-      if (damage > 0) {
-        hp[opponent] -= damage;
-        if (hp[opponent] < 0) hp[opponent] = 0;
-      }
+      board[idx] = symbols[currentPlayer];
 
-      lastAction = i.customId === 'defend' ? 'defend' : null;
-
-      // Check for win
-      if (hp[opponent] <= 0) {
+      // Check win or draw
+      if (checkWin(board, symbols[currentPlayer])) {
         collector.stop('win');
-
-        // Adjust balances for bets
-        if (bet > 0) {
-          if (!balances[player1.id]) balances[player1.id] = { mia: 0 };
-          if (!balances[player2.id]) balances[player2.id] = { mia: 0 };
-
-          balances[turn].mia += bet;
-          balances[opponent].mia -= bet;
-          saveBalances();
-        }
-
         return i.update({
-          content: `${actionText}\n\n${i.user} won the fight! ${bet > 0 ? `They won ${bet} Mia Coins!` : ''}\n\nFinal HP: ${player1}: ${hp[player1.id]} | ${player2}: ${hp[player2.id]}`,
+          content: `🎉 <@${currentPlayer}> wins Tic Tac Toe!`,
+          components: []
+        });
+      } else if (isDraw(board)) {
+        collector.stop('draw');
+        return i.update({
+          content: "It's a draw!",
           components: []
         });
       }
 
-      // Switch turns
-      turn = opponent;
+      // Switch turn
+      currentPlayer = currentPlayer === player1.id ? player2.id : player1.id;
+
+      // Update buttons
+      const updateRow = (start) => {
+        const row = new ActionRowBuilder();
+        for (let i = start; i < start + 3; i++) {
+          row.addComponents(
+            new ButtonBuilder()
+              .setCustomId(i.toString())
+              .setLabel(board[i] || ' ')
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(board[i] !== null)
+          );
+        }
+        return row;
+      };
+
+      const updatedRows = [updateRow(0), updateRow(3), updateRow(6)];
 
       await i.update({
-        content: `${actionText}\n\nIt's <@${turn}>'s turn!\n\n${player1}: ${hp[player1.id]} HP | ${player2}: ${hp[player2.id]} HP\nBet: ${bet} Mia Coins`,
-        components: [createActionRow()]
+        content: `🎮 Tic Tac Toe: <@${player1.id}> (❌) vs <@${player2.id}> (⭕) ${bet > 0 ? `| Bet: ${bet} Mia coins` : ''}\n` +
+                 `It's <@${currentPlayer}>'s turn!`,
+        components: updatedRows
       });
     });
 
-    collector.on('end', async (_, reason) => {
-      if (reason === 'time') {
-        await fightMessage.edit({
-          content: 'Fight ended due to inactivity.',
+    collector.on('end', (collected, reason) => {
+      if (reason !== 'win' && reason !== 'draw') {
+        interaction.editReply({
+          content: 'Game ended due to inactivity.',
           components: []
         });
       }

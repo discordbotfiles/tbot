@@ -1,100 +1,117 @@
 const fs = require('fs');
 const path = require('path');
+const dataFile = path.join(__dirname, '..', 'data', 'miaCoins.json');
+const cooldownFile = path.join(__dirname, '..', 'data', 'robCooldowns.json');
 
-const balancesPath = path.join(__dirname, '..', 'data', 'balances.json');
-const robCooldownPath = path.join(__dirname, '..', 'data', 'robCooldowns.json');
-const defensePath = path.join(__dirname, '..', 'data', 'defense.json');
-
-function readJSON(file) {
-  if (!fs.existsSync(file)) return {};
-  return JSON.parse(fs.readFileSync(file));
+function getUserData(userId) {
+  if (!fs.existsSync(dataFile)) return {};
+  const data = JSON.parse(fs.readFileSync(dataFile));
+  return data[userId] || { balance: 0, inventory: [] };
 }
 
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+function saveUserData(userId, userData) {
+  const data = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : {};
+  data[userId] = userData;
+  fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 }
+
+function getCooldowns() {
+  if (!fs.existsSync(cooldownFile)) return {};
+  return JSON.parse(fs.readFileSync(cooldownFile));
+}
+
+function saveCooldowns(cooldowns) {
+  fs.writeFileSync(cooldownFile, JSON.stringify(cooldowns, null, 2));
+}
+
+const COOLDOWN = 1000 * 60 * 15; // 15 minutes cooldown
 
 module.exports = {
   data: {
     name: 'rob',
-    description: 'Try to rob another user\'s Mia Coins.',
+    description: 'Try to rob another user',
     options: [
       {
-        name: 'user',
-        type: 6, // USER type
+        name: 'target',
+        type: 6, // USER
         description: 'User to rob',
         required: true,
-      },
-    ],
+      }
+    ]
   },
 
   async execute(interactionOrMessage, args) {
-    const isSlash = interactionOrMessage.isCommand?.();
-    const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+    let userId, targetId, reply;
 
-    const balances = readJSON(balancesPath);
-    const robCooldowns = readJSON(robCooldownPath);
-    const defense = readJSON(defensePath);
-
-    let targetId;
-    if (isSlash) {
-      targetId = interactionOrMessage.options.getUser('user').id;
+    if (interactionOrMessage.user) {
+      userId = interactionOrMessage.user.id;
+      targetId = interactionOrMessage.options.getUser('target').id;
     } else {
-      if (!args || args.length === 0) {
-        return interactionOrMessage.channel.send('Please specify a user to rob.');
+      userId = interactionOrMessage.author.id;
+      if (!args.length) {
+        return interactionOrMessage.channel.send('Please mention a user to rob.');
       }
-      targetId = args[0].replace(/[<@!>]/g, ''); // Clean mention
+      const mentioned = interactionOrMessage.mentions.users.first();
+      if (!mentioned) return interactionOrMessage.channel.send('Please mention a valid user.');
+      targetId = mentioned.id;
     }
 
-    if (targetId === authorId) {
-      const msg = `You can't rob yourself!`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    if (targetId === userId) {
+      reply = "You can't rob yourself!";
+      if (interactionOrMessage.user) {
+        return interactionOrMessage.reply({ content: reply, ephemeral: true });
+      } else {
+        return interactionOrMessage.channel.send(reply);
+      }
     }
 
-    // Check cooldown
+    const cooldowns = getCooldowns();
     const now = Date.now();
-    const cooldownAmount = 1000 * 60 * 30; // 30 min cooldown
-    if (robCooldowns[authorId] && now - robCooldowns[authorId] < cooldownAmount) {
-      const timeLeft = cooldownAmount - (now - robCooldowns[authorId]);
-      const minutes = Math.floor(timeLeft / 60000);
-      const seconds = Math.floor((timeLeft % 60000) / 1000);
-      const msg = `You need to wait ${minutes}m ${seconds}s before robbing again.`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+
+    if (cooldowns[userId] && now - cooldowns[userId] < COOLDOWN) {
+      const remaining = Math.ceil((COOLDOWN - (now - cooldowns[userId])) / 1000);
+      reply = `⏳ You need to wait ${remaining} more seconds before trying to rob again.`;
+      if (interactionOrMessage.user) {
+        return interactionOrMessage.reply({ content: reply, ephemeral: true });
+      } else {
+        return interactionOrMessage.channel.send(reply);
+      }
     }
 
-    // Check target balance and defense
-    const targetBalance = balances[targetId] || 0;
-    if (targetBalance < 50) {
-      const msg = `The target doesn't have enough Mia Coins to rob.`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    const userData = getUserData(userId);
+    const targetData = getUserData(targetId);
+
+    if ((targetData.balance || 0) < 50) {
+      reply = 'That user doesn\'t have enough Mia coins to rob!';
+      if (interactionOrMessage.user) {
+        return interactionOrMessage.reply({ content: reply, ephemeral: true });
+      } else {
+        return interactionOrMessage.channel.send(reply);
+      }
     }
 
-    if (defense[targetId] && defense[targetId] > 0) {
-      const msg = `The target has robbery defense active. You failed to rob them!`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    const success = Math.random() < 0.5; // 50% chance success
+    if (success) {
+      const amountStolen = Math.floor(Math.random() * (targetData.balance / 2)) + 1;
+      targetData.balance -= amountStolen;
+      userData.balance += amountStolen;
+      reply = `💰 You successfully robbed **${amountStolen}** Mia coins from <@${targetId}>!`;
+    } else {
+      const penalty = Math.floor(Math.random() * (userData.balance / 4)) + 1;
+      userData.balance = Math.max(0, userData.balance - penalty);
+      reply = `❌ Robbery failed! You lost **${penalty}** Mia coins as penalty.`;
     }
 
-    // Rob amount (random 10-50% of target's balance)
-    const robAmount = Math.floor(targetBalance * (Math.random() * 0.4 + 0.1));
+    saveUserData(userId, userData);
+    saveUserData(targetId, targetData);
 
-    balances[authorId] = (balances[authorId] || 0) + robAmount;
-    balances[targetId] = balances[targetId] - robAmount;
+    cooldowns[userId] = now;
+    saveCooldowns(cooldowns);
 
-    robCooldowns[authorId] = now;
-
-    writeJSON(balancesPath, balances);
-    writeJSON(robCooldownPath, robCooldowns);
-
-    const msg = `You successfully robbed **${robAmount}** Mia Coins from <@${targetId}>!\nYour new balance: **${balances[authorId]} -- mia**`;
-
-    if (isSlash) await interactionOrMessage.reply(msg);
-    else {
-      await interactionOrMessage.channel.send(msg);
-      interactionOrMessage.delete().catch(() => {});
+    if (interactionOrMessage.user) {
+      await interactionOrMessage.reply({ content: reply, ephemeral: false });
+    } else {
+      await interactionOrMessage.channel.send(reply);
     }
-  },
+  }
 };

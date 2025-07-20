@@ -1,56 +1,57 @@
 const fs = require('fs');
 const path = require('path');
+const dataFile = path.join(__dirname, '..', 'data', 'miaCoins.json');
 
-const balancesPath = path.join(__dirname, '..', 'data', 'balances.json');
-const inventoryPath = path.join(__dirname, '..', 'data', 'inventory.json');
-
-function readJSON(file) {
-  if (!fs.existsSync(file)) return {};
-  return JSON.parse(fs.readFileSync(file));
+function getUserData(userId) {
+  if (!fs.existsSync(dataFile)) return {};
+  const data = JSON.parse(fs.readFileSync(dataFile));
+  return data[userId] || { balance: 0, inventory: [] };
 }
 
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+function saveUserData(userId, userData) {
+  const data = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : {};
+  data[userId] = userData;
+  fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 }
+
+const huntAnimals = ['🦌', '🐗', '🐇', '🦊', '🐺'];
 
 module.exports = {
   data: {
     name: 'hunt',
-    description: 'Go hunting to earn Mia Coins. Requires a Hunting Knife.',
+    description: 'Go hunting (requires Hunting Knife)',
   },
 
-  async execute(interactionOrMessage) {
-    const isSlash = interactionOrMessage.isCommand?.();
-    const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+  async execute(interactionOrMessage, args) {
+    let userId, reply;
 
-    const balances = readJSON(balancesPath);
-    const inventory = readJSON(inventoryPath);
-
-    if (!inventory[userId] || !inventory[userId].includes('huntingknife')) {
-      const msg = 'You need a Hunting Knife to hunt. Buy one from the store!';
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    if (interactionOrMessage.user) {
+      userId = interactionOrMessage.user.id;
+    } else {
+      userId = interactionOrMessage.author.id;
     }
 
-    const animals = [
-      { name: 'Rabbit', value: 30 },
-      { name: 'Deer', value: 70 },
-      { name: 'Boar', value: 120 },
-      { name: 'Bear', value: 300 },
-    ];
-
-    const caught = animals[Math.floor(Math.random() * animals.length)];
-
-    balances[userId] = (balances[userId] || 0) + caught.value;
-
-    writeJSON(balancesPath, balances);
-
-    const msg = `You hunted a **${caught.name}** and earned **${caught.value}** Mia Coins!\nYour new balance: **${balances[userId]} -- mia**`;
-
-    if (isSlash) await interactionOrMessage.reply(msg);
-    else {
-      await interactionOrMessage.channel.send(msg);
-      interactionOrMessage.delete().catch(() => {});
+    const userData = getUserData(userId);
+    if (!userData.inventory || !userData.inventory.includes('huntingknife')) {
+      reply = '🔪 You need a Hunting Knife to hunt! Buy one from the store.';
+      if (interactionOrMessage.user) {
+        return interactionOrMessage.reply({ content: reply, ephemeral: true });
+      } else {
+        return interactionOrMessage.channel.send(reply);
+      }
     }
-  },
+
+    const caught = huntAnimals[Math.floor(Math.random() * huntAnimals.length)];
+    const earned = Math.floor(Math.random() * 120) + 30;
+    userData.balance = (userData.balance || 0) + earned;
+    saveUserData(userId, userData);
+
+    reply = `🔪 You hunted a ${caught} and earned **${earned}** Mia coins!`;
+
+    if (interactionOrMessage.user) {
+      await interactionOrMessage.reply({ content: reply, ephemeral: false });
+    } else {
+      await interactionOrMessage.channel.send(reply);
+    }
+  }
 };

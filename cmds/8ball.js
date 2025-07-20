@@ -1,51 +1,56 @@
+const answers = [
+  "It is certain.",
+  "Without a doubt.",
+  "You may rely on it.",
+  "Yes, definitely.",
+  "It is decidedly so.",
+  "As I see it, yes.",
+  "Most likely.",
+  "Yes.",
+  "Signs point to yes.",
+  "Reply hazy, try again.",
+  "Ask again later.",
+  "Better not tell you now.",
+  "Cannot predict now.",
+  "Concentrate and ask again.",
+  "Don't count on it.",
+  "My reply is no.",
+  "My sources say no.",
+  "Outlook not so good.",
+  "Very doubtful."
+];
+
 module.exports = {
   data: {
     name: '8ball',
-    description: 'Ask the magic 8ball a question.',
+    description: 'Ask the magic 8ball',
     options: [
       {
         name: 'question',
         type: 3, // STRING
         description: 'Your question',
         required: true,
-      },
-    ],
+      }
+    ]
   },
 
   async execute(interactionOrMessage, args) {
-    const isSlash = interactionOrMessage.isCommand?.();
-    const question = isSlash
-      ? interactionOrMessage.options.getString('question')
-      : args && args.length > 0
-      ? args.join(' ')
-      : null;
+    let question;
 
-    if (!question) {
-      const msg = 'Please ask a question.';
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
+    if (interactionOrMessage.user) {
+      question = interactionOrMessage.options.getString('question');
+    } else {
+      if (!args.length) return interactionOrMessage.channel.send('Please ask a question.');
+      question = args.join(' ');
     }
 
-    const responses = [
-      'It is certain.',
-      'Without a doubt.',
-      'You may rely on it.',
-      'Ask again later.',
-      'Better not tell you now.',
-      'Don’t count on it.',
-      'My reply is no.',
-      'Very doubtful.',
-      'Signs point to yes.',
-    ];
+    const answer = answers[Math.floor(Math.random() * answers.length)];
+    const reply = `🎱 Question: ${question}\nAnswer: ${answer}`;
 
-    const answer = responses[Math.floor(Math.random() * responses.length)];
-
-    const msg = `🎱 Question: ${question}\nAnswer: **${answer}**`;
-
-    if (isSlash) await interactionOrMessage.reply(msg);
-    else {
-      await interactionOrMessage.channel.send(msg);
-      interactionOrMessage.delete().catch(() => {});
+    if (interactionOrMessage.user) {
+      await interactionOrMessage.reply({ content: reply, ephemeral: false });
+    } else {
+      await interactionOrMessage.channel.send(reply);
     }
-  },
+  }
 };

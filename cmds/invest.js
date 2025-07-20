@@ -1,90 +1,74 @@
 const fs = require('fs');
 const path = require('path');
+const dataFile = path.join(__dirname, '..', 'data', 'miaCoins.json');
 
-const balancesPath = path.join(__dirname, '..', 'data', 'balances.json');
-const investCooldownPath = path.join(__dirname, '..', 'data', 'investCooldowns.json');
-
-function readJSON(file) {
-  if (!fs.existsSync(file)) return {};
-  return JSON.parse(fs.readFileSync(file));
+function getUserData(userId) {
+  if (!fs.existsSync(dataFile)) return {};
+  const data = JSON.parse(fs.readFileSync(dataFile));
+  return data[userId] || { balance: 0, inventory: [] };
 }
 
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+function saveUserData(userId, userData) {
+  const data = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : {};
+  data[userId] = userData;
+  fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 }
 
 module.exports = {
   data: {
     name: 'invest',
-    description: 'Invest Mia Coins and get a chance to double or lose your money.',
+    description: 'Invest Mia Coins',
     options: [
       {
         name: 'amount',
         type: 4, // INTEGER
-        description: 'Amount to invest',
+        description: 'Amount of Mia coins to invest',
         required: true,
-      },
-    ],
+      }
+    ]
   },
 
   async execute(interactionOrMessage, args) {
-    const isSlash = interactionOrMessage.isCommand?.();
-    const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+    let userId, amount;
 
-    const balances = readJSON(balancesPath);
-    const investCooldowns = readJSON(investCooldownPath);
-
-    const now = Date.now();
-    const cooldownAmount = 1000 * 60 * 60 * 3; // 3 hours cooldown
-
-    if (investCooldowns[userId] && now - investCooldowns[userId] < cooldownAmount) {
-      const timeLeft = cooldownAmount - (now - investCooldowns[userId]);
-      const minutes = Math.floor(timeLeft / 60000);
-      const seconds = Math.floor((timeLeft % 60000) / 1000);
-      const msg = `You must wait ${minutes}m ${seconds}s before investing again.`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
-    }
-
-    const amount = isSlash
-      ? interactionOrMessage.options.getInteger('amount')
-      : args && args.length > 0
-      ? parseInt(args[0], 10)
-      : null;
-
-    if (!amount || amount <= 0) {
-      const msg = 'Please provide a valid amount to invest.';
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
-    }
-
-    if (!balances[userId] || balances[userId] < amount) {
-      const msg = `You don't have enough Mia Coins. Your balance: ${balances[userId] || 0} -- mia.`;
-      if (isSlash) return interactionOrMessage.reply({ content: msg, ephemeral: true });
-      else return interactionOrMessage.channel.send(msg);
-    }
-
-    // Invest result: 50% chance to double, 50% lose half
-    const success = Math.random() < 0.5;
-    if (success) {
-      balances[userId] += amount;
+    if (interactionOrMessage.user) {
+      userId = interactionOrMessage.user.id;
+      amount = interactionOrMessage.options.getInteger('amount');
     } else {
-      balances[userId] -= Math.floor(amount / 2);
+      userId = interactionOrMessage.author.id;
+      if (!args.length) return interactionOrMessage.channel.send('Please specify an amount to invest.');
+      amount = parseInt(args[0]);
+      if (isNaN(amount) || amount <= 0) {
+        return interactionOrMessage.channel.send('Please provide a valid positive number as amount.');
+      }
     }
 
-    investCooldowns[userId] = now;
-
-    writeJSON(balancesPath, balances);
-    writeJSON(investCooldownPath, investCooldowns);
-
-    const msg = success
-      ? `Your investment paid off! You gained **${amount}** Mia Coins.\nNew balance: **${balances[userId]} -- mia**`
-      : `Your investment failed. You lost **${Math.floor(amount / 2)}** Mia Coins.\nNew balance: **${balances[userId]} -- mia**`;
-
-    if (isSlash) await interactionOrMessage.reply(msg);
-    else {
-      await interactionOrMessage.channel.send(msg);
-      interactionOrMessage.delete().catch(() => {});
+    const userData = getUserData(userId);
+    if ((userData.balance || 0) < amount) {
+      const msg = "You don't have enough Mia coins to invest that amount.";
+      if (interactionOrMessage.user) return interactionOrMessage.reply({ content: msg, ephemeral: true });
+      else return interactionOrMessage.channel.send(msg);
     }
-  },
+
+    // Simplified random investment return: 50% chance double, 50% lose half invested
+    const success = Math.random() < 0.5;
+    let reply;
+    if (success) {
+      const gain = amount * 2;
+      userData.balance += gain;
+      reply = `💹 Your investment succeeded! You gained **${gain}** Mia coins.`;
+    } else {
+      const loss = Math.floor(amount / 2);
+      userData.balance -= loss;
+      reply = `📉 Your investment failed! You lost **${loss}** Mia coins.`;
+    }
+
+    saveUserData(userId, userData);
+
+    if (interactionOrMessage.user) {
+      await interactionOrMessage.reply({ content: reply, ephemeral: false });
+    } else {
+      await interactionOrMessage.channel.send(reply);
+    }
+  }
 };
